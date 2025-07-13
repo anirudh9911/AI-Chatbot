@@ -182,7 +182,7 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
     yield f"data: {{\"type\": \"end\"}}\n\n"
 
 @app.get("/chat_stream/{message}")
-async def chat_stream(message: str, checkpoint_id: Optional[str] = Query(None)):
+async def chat_stream(message: str, checkpoint_id: Optional[str] = Query(None)):  #message: str --> This syntax is Pydantic which is used for data validations and serialization
     return StreamingResponse(
         generate_chat_responses(message, checkpoint_id), 
         media_type="text/event-stream"
