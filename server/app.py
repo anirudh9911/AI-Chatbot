@@ -126,7 +126,7 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
         )
         
         # First send the checkpoint ID
-        yield f"data: {{\"type\": \"checkpoint\", \"checkpoint_id\": \"{new_checkpoint_id}\"}}\n\n"
+        yield f"data: {json.dumps({'type': 'checkpoint', 'checkpoint_id': new_checkpoint_id})}\n\n"
     else:
         config = {
             "configurable": {
@@ -148,7 +148,7 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
             # Escape single quotes and newlines for safe JSON parsing
             safe_content = chunk_content.replace("'", "\\'").replace("\n", "\\n")
             
-            yield f"data: {{\"type\": \"content\", \"content\": \"{safe_content}\"}}\n\n"
+            yield f"data: {json.dumps({'type': 'content', 'content': chunk_content})}\n\n"
             
         elif event_type == "on_chat_model_end":
             # Check if there are tool calls for search
@@ -160,7 +160,7 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
                 search_query = search_calls[0]["args"].get("query", "")
                 # Escape quotes and special characters
                 safe_query = search_query.replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
-                yield f"data: {{\"type\": \"search_start\", \"query\": \"{safe_query}\"}}\n\n"
+                yield f"data: {json.dumps({'type': 'search_start', 'query': search_query})}\n\n"
                 
         elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
             # Search completed - send results or error
@@ -176,10 +176,10 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
                 
                 # Convert URLs to JSON and yield them
                 urls_json = json.dumps(urls)
-                yield f"data: {{\"type\": \"search_results\", \"urls\": {urls_json}}}\n\n"
+                yield f"data: {json.dumps({'type': 'search_results', 'urls': urls})}\n\n"
     
     # Send an end event
-    yield f"data: {{\"type\": \"end\"}}\n\n"
+    yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
 @app.get("/chat_stream/{message}")
 async def chat_stream(message: str, checkpoint_id: Optional[str] = Query(None)):  #message: str --> This syntax is Pydantic which is used for data validations and serialization
