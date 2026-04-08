@@ -153,7 +153,7 @@ const MessageArea = ({ messages } : MessageAreaProps) => {
                                             <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:underline">
                                             <ReactMarkdown
                                                 components={{
-                                                a: ({ node, ...props }) => 
+                                                a: ({ node: _node, ...props }) =>
                                                     <a {...props} 
                                                         target="_blank" 
                                                         rel="noopener noreferrer" 

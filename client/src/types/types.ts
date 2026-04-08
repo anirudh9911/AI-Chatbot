@@ -3,7 +3,7 @@
 export interface SearchResult {
   title?: string;
   url?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface SearchInfo {

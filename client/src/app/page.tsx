@@ -69,7 +69,6 @@ const Home = () => {
         const eventSource = new EventSource(url);
         let streamedContent = "";
         let searchData: SearchInfo | null = null;
-        let hasReceivedContent = false;
 
         // Process incoming messages
         eventSource.onmessage = (event) => {
@@ -82,7 +81,6 @@ const Home = () => {
             }
             else if (data.type === 'content') {
               streamedContent += data.content;
-              hasReceivedContent = true;
 
               // Update message with accumulated content
               setMessages(prev =>
