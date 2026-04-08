@@ -77,6 +77,39 @@ const Home = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleDelete = async (threadId: string) => {
+    try {
+      await fetch(`${API_BASE}/conversations/${threadId}`, { method: "DELETE" });
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+    }
+    // Remove from local state and localStorage
+    setConversations(prev => prev.filter(c => c.thread_id !== threadId));
+    setConversationMessages(prev => {
+      const updated = { ...prev };
+      delete updated[threadId];
+      return updated;
+    });
+    // If the deleted conversation was active, start a new chat
+    if (checkpointId === threadId) handleNewChat();
+  };
+
+  const handleRename = async (threadId: string, newTitle: string) => {
+    try {
+      await fetch(`${API_BASE}/conversations/${threadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle }),
+      });
+    } catch (err) {
+      console.error("Failed to rename conversation:", err);
+    }
+    // Update local state immediately (optimistic update)
+    setConversations(prev =>
+      prev.map(c => c.thread_id === threadId ? { ...c, title: newTitle } : c)
+    );
+  };
+
   /**
    * Wrapper that updates both the visible messages AND the per-conversation
    * history map in a single atomic state update, so they never go out of sync.
@@ -270,6 +303,8 @@ const Home = () => {
         activeId={checkpointId}
         onSelect={handleSelectConversation}
         onNewChat={handleNewChat}
+        onDelete={handleDelete}
+        onRename={handleRename}
         isLoading={isLoadingConversations}
       />
 

@@ -185,6 +185,26 @@ async def get_conversation(thread_id: str):
     }
 
 
+@app.patch("/conversations/{thread_id}")
+async def rename_conversation(thread_id: str, body: dict):
+    title = str(body.get("title", "")).strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    db = next(get_db())
+    conv = db.get(Conversation, thread_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv.title = title[:80]
+    conv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {
+        "thread_id": conv.thread_id,
+        "title": conv.title,
+        "created_at": conv.created_at.isoformat(),
+        "updated_at": conv.updated_at.isoformat(),
+    }
+
+
 @app.delete("/conversations/{thread_id}", status_code=204)
 async def delete_conversation(thread_id: str):
     db = next(get_db())
