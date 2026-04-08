@@ -17,15 +17,50 @@ const WELCOME_MESSAGE: Message = {
 };
 
 const Home = () => {
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
+  // Initialize state from localStorage on first render so history
+  // survives page refreshes. Falls back to defaults if nothing stored.
+  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>(() => {
+    try {
+      const stored = localStorage.getItem('inquiro_messages');
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
+  });
+
+  const [checkpointId, setCheckpointId] = useState<string | null>(() => {
+    try { return localStorage.getItem('inquiro_checkpoint'); }
+    catch { return null; }
+  });
+
+  // Restore the last active conversation's messages on load
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const storedId = localStorage.getItem('inquiro_checkpoint');
+      const storedMessages = localStorage.getItem('inquiro_messages');
+      if (storedId && storedMessages) {
+        const map = JSON.parse(storedMessages) as Record<string, Message[]>;
+        return map[storedId] || [WELCOME_MESSAGE];
+      }
+    } catch { /* fall through */ }
+    return [WELCOME_MESSAGE];
+  });
+
   const [currentMessage, setCurrentMessage] = useState("");
-  const [checkpointId, setCheckpointId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
 
-  // Stores full message history per conversation (keyed by thread_id).
-  // This is what lets us restore the UI when switching between past conversations.
-  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>({});
+  // Persist message history to localStorage whenever it changes
+  useEffect(() => {
+    try { localStorage.setItem('inquiro_messages', JSON.stringify(conversationMessages)); }
+    catch { /* storage quota exceeded — fail silently */ }
+  }, [conversationMessages]);
+
+  // Persist active checkpoint to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      if (checkpointId) localStorage.setItem('inquiro_checkpoint', checkpointId);
+      else localStorage.removeItem('inquiro_checkpoint');
+    } catch { /* fail silently */ }
+  }, [checkpointId]);
 
   const fetchConversations = async () => {
     try {
