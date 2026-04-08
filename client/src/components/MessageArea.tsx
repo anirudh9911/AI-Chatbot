@@ -66,27 +66,27 @@ const SearchStages = ({ searchInfo }: SearchStagesProps)  => {
                         <div className="flex flex-col">
                             <span className="font-medium mb-2 ml-2">Reading</span>
 
-                            {/* Search Results */}
-                            {searchInfo.urls && searchInfo.urls.length > 0 && (
-                                <div className="pl-2 space-y-1">
-                                    <div className="flex flex-wrap gap-2">
-                                        {Array.isArray(searchInfo.urls) && searchInfo.urls.length > 0 && (
-                                        <div className="pl-2 space-y-1">
-                                            <div className="flex flex-wrap gap-2">
-                                            {searchInfo.urls.map((url, index) => (
-                                                <div
+                            {/* Search Results — clickable source chips */}
+                            {Array.isArray(searchInfo.urls) && searchInfo.urls.length > 0 && (
+                                <div className="pl-2 flex flex-wrap gap-2 mt-1">
+                                    {searchInfo.urls.map((source, index) => {
+                                        const href = typeof source === 'string' ? source : source.url as string;
+                                        const label = typeof source === 'string'
+                                            ? new URL(source).hostname.replace('www.', '')
+                                            : (source.title as string) || new URL(href).hostname.replace('www.', '');
+                                        return (
+                                            <a
                                                 key={index}
-                                                className="bg-gray-100 text-xs px-3 py-1.5 rounded border border-gray-200 truncate max-w-[200px] transition-all duration-200 hover:bg-gray-50"
-                                                >
-                                                {typeof url === 'string'
-                                                    ? url.substring(0, 30)
-                                                    : JSON.stringify(url).substring(0, 30)}
-                                                </div>
-                                            ))}
-                                            </div>
-                                        </div>
-                                        )}
-                                    </div>
+                                                href={href}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="bg-gray-100 text-xs px-3 py-1.5 rounded border border-gray-200 truncate max-w-[180px] hover:bg-teal-50 hover:border-teal-300 hover:text-teal-700 transition-all duration-150"
+                                                title={href}
+                                            >
+                                                {label}
+                                            </a>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>

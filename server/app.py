@@ -269,8 +269,13 @@ async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = N
         elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
             output = event["data"]["output"]
             if isinstance(output, list):
-                urls = [item["url"] for item in output if isinstance(item, dict) and "url" in item]
-                yield f"data: {json.dumps({'type': 'search_results', 'urls': urls})}\n\n"
+                # Send both url and title so the frontend can display source names
+                sources = [
+                    {"url": item["url"], "title": item.get("title", item["url"])}
+                    for item in output
+                    if isinstance(item, dict) and "url" in item
+                ]
+                yield f"data: {json.dumps({'type': 'search_results', 'urls': sources})}\n\n"
 
     # Update updated_at for existing conversations so sidebar order refreshes
     if not is_new_conversation:
