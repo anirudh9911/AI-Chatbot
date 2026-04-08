@@ -1,0 +1,14 @@
+# Dependencies (reinstalled inside container)
+node_modules
+
+# Build output (generated during docker build)
+.next
+
+# Environment files (never bake secrets into the image)
+.env
+.env.*
+!.env.example
+
+# Dev artifacts
+*.md
+.DS_Store
