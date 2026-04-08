@@ -1,191 +1,268 @@
-from typing import TypedDict, Annotated, Optional
-from langgraph.graph import add_messages, StateGraph, END
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessageChunk, ToolMessage
-from dotenv import load_dotenv
-from langchain_community.tools.tavily_search import TavilySearchResults
-from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 import json
+import os
+from datetime import datetime, timezone
+from typing import Annotated, Optional
 from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph, add_messages
+from typing_extensions import TypedDict
+from dotenv import load_dotenv
+
+from database import Conversation, create_tables, get_db
+from logging_config import log_requests, setup_logging
 
 load_dotenv()
 
-# Initialize memory saver for checkpointing
+logger = setup_logging()
+
+# ---------------------------------------------------------------------------
+# LangGraph setup
+# ---------------------------------------------------------------------------
+
 memory = MemorySaver()
+
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
-search_tool = TavilySearchResults(
-    max_results=4,
-)
 
+search_tool = TavilySearchResults(max_results=4)
 tools = [search_tool]
 
 llm = ChatOpenAI(model="gpt-4o")
-
 llm_with_tools = llm.bind_tools(tools=tools)
+
 
 async def model(state: State):
     result = await llm_with_tools.ainvoke(state["messages"])
-    return {
-        "messages": [result], 
-    }
+    return {"messages": [result]}
+
 
 async def tools_router(state: State):
     last_message = state["messages"][-1]
-
-    if(hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0):
+    if hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0:
         return "tool_node"
-    else: 
-        return END
-    
-async def tool_node(state):
-    """Custom tool node that handles tool calls from the LLM."""
-    # Get the tool calls from the last message
+    return END
+
+
+async def tool_node(state: State):
+    """Execute tool calls requested by the LLM and return ToolMessages."""
     tool_calls = state["messages"][-1].tool_calls
-    
-    # Initialize list to store tool messages
     tool_messages = []
-    
-    # Process each tool call
+
     for tool_call in tool_calls:
-        tool_name = tool_call["name"]
-        tool_args = tool_call["args"]
-        tool_id = tool_call["id"]
-        
-        # Handle the search tool
-        if tool_name == "tavily_search_results_json":
-            # Execute the search tool with the provided arguments
-            search_results = await search_tool.ainvoke(tool_args)
-            
-            # Create a ToolMessage for this result
-            tool_message = ToolMessage(
-                content=str(search_results),
-                tool_call_id=tool_id,
-                name=tool_name
+        if tool_call["name"] == "tavily_search_results_json":
+            search_results = await search_tool.ainvoke(tool_call["args"])
+            tool_messages.append(
+                ToolMessage(
+                    content=str(search_results),
+                    tool_call_id=tool_call["id"],
+                    name=tool_call["name"],
+                )
             )
-            
-            tool_messages.append(tool_message)
-    
-    # Add the tool messages to the state
+
     return {"messages": tool_messages}
 
-graph_builder = StateGraph(State)
 
+graph_builder = StateGraph(State)
 graph_builder.add_node("model", model)
 graph_builder.add_node("tool_node", tool_node)
 graph_builder.set_entry_point("model")
-
 graph_builder.add_conditional_edges("model", tools_router)
 graph_builder.add_edge("tool_node", "model")
-
 graph = graph_builder.compile(checkpointer=memory)
 
-app = FastAPI()
+# ---------------------------------------------------------------------------
+# FastAPI setup
+# ---------------------------------------------------------------------------
 
-# Add CORS middleware with settings that match frontend requirements
+app = FastAPI(title="Inquiro API", version="1.0.0")
+
+# Tighten CORS: read allowed origins from env, default to localhost for dev.
+# In production set ALLOWED_ORIGINS=https://yourdomain.com
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"], 
-    expose_headers=["Content-Type"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Type"],
 )
 
-def serialise_ai_message_chunk(chunk): 
-    if(isinstance(chunk, AIMessageChunk)):
+app.middleware("http")(log_requests)
+
+
+@app.on_event("startup")
+def on_startup():
+    create_tables()
+    logger.info("Database tables ready")
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint (used by Docker healthcheck and K8s readiness probe)
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "1.0.0",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Conversations endpoints (power the sidebar)
+# ---------------------------------------------------------------------------
+
+@app.get("/conversations")
+async def list_conversations():
+    """Return all conversations ordered by most recently updated, limit 50."""
+    db = next(get_db())
+    convs = (
+        db.query(Conversation)
+        .order_by(Conversation.updated_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {
+            "thread_id": c.thread_id,
+            "title": c.title,
+            "created_at": c.created_at.isoformat(),
+            "updated_at": c.updated_at.isoformat(),
+        }
+        for c in convs
+    ]
+
+
+@app.get("/conversations/{thread_id}")
+async def get_conversation(thread_id: str):
+    db = next(get_db())
+    conv = db.get(Conversation, thread_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {
+        "thread_id": conv.thread_id,
+        "title": conv.title,
+        "created_at": conv.created_at.isoformat(),
+        "updated_at": conv.updated_at.isoformat(),
+    }
+
+
+@app.delete("/conversations/{thread_id}", status_code=204)
+async def delete_conversation(thread_id: str):
+    db = next(get_db())
+    conv = db.get(Conversation, thread_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    db.delete(conv)
+    db.commit()
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Chat stream endpoint
+# ---------------------------------------------------------------------------
+
+def serialise_ai_message_chunk(chunk) -> str:
+    if isinstance(chunk, AIMessageChunk):
         return chunk.content
-    else:
-        raise TypeError(
-            f"Object of type {type(chunk).__name__} is not correctly formatted for serialisation"
-        )
+    raise TypeError(
+        f"Object of type {type(chunk).__name__} is not correctly formatted for serialisation"
+    )
+
 
 async def generate_chat_responses(message: str, checkpoint_id: Optional[str] = None):
     is_new_conversation = checkpoint_id is None
-    
-    if is_new_conversation:
-        # Generate new checkpoint ID for first message in conversation
-        new_checkpoint_id = str(uuid4())
 
-        config = {
-            "configurable": {
-                "thread_id": new_checkpoint_id
-            }
-        }
-        
-        # Initialize with first message
+    if is_new_conversation:
+        new_checkpoint_id = str(uuid4())
+        config = {"configurable": {"thread_id": new_checkpoint_id}}
+
         events = graph.astream_events(
             {"messages": [HumanMessage(content=message)]},
             version="v2",
-            config=config
+            config=config,
         )
-        
-        # First send the checkpoint ID
+
         yield f"data: {json.dumps({'type': 'checkpoint', 'checkpoint_id': new_checkpoint_id})}\n\n"
+
+        # Persist new conversation to SQLite
+        db = next(get_db())
+        try:
+            db.add(
+                Conversation(
+                    thread_id=new_checkpoint_id,
+                    title=message[:80],
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        active_checkpoint_id = new_checkpoint_id
     else:
-        config = {
-            "configurable": {
-                "thread_id": checkpoint_id
-            }
-        }
-        # Continue existing conversation
+        config = {"configurable": {"thread_id": checkpoint_id}}
         events = graph.astream_events(
             {"messages": [HumanMessage(content=message)]},
             version="v2",
-            config=config
+            config=config,
         )
+        active_checkpoint_id = checkpoint_id
 
     async for event in events:
         event_type = event["event"]
-        
+
         if event_type == "on_chat_model_stream":
             chunk_content = serialise_ai_message_chunk(event["data"]["chunk"])
-            # Escape single quotes and newlines for safe JSON parsing
-            safe_content = chunk_content.replace("'", "\\'").replace("\n", "\\n")
-            
             yield f"data: {json.dumps({'type': 'content', 'content': chunk_content})}\n\n"
-            
+
         elif event_type == "on_chat_model_end":
-            # Check if there are tool calls for search
-            tool_calls = event["data"]["output"].tool_calls if hasattr(event["data"]["output"], "tool_calls") else []
-            search_calls = [call for call in tool_calls if call["name"] == "tavily_search_results_json"]
-            
+            tool_calls = (
+                event["data"]["output"].tool_calls
+                if hasattr(event["data"]["output"], "tool_calls")
+                else []
+            )
+            search_calls = [
+                c for c in tool_calls if c["name"] == "tavily_search_results_json"
+            ]
             if search_calls:
-                # Signal that a search is starting
                 search_query = search_calls[0]["args"].get("query", "")
-                # Escape quotes and special characters
-                safe_query = search_query.replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
                 yield f"data: {json.dumps({'type': 'search_start', 'query': search_query})}\n\n"
-                
+
         elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
-            # Search completed - send results or error
             output = event["data"]["output"]
-            
-            # Check if output is a list 
             if isinstance(output, list):
-                # Extract URLs from list of search results
-                urls = []
-                for item in output:
-                    if isinstance(item, dict) and "url" in item:
-                        urls.append(item["url"])
-                
-                # Convert URLs to JSON and yield them
-                urls_json = json.dumps(urls)
+                urls = [item["url"] for item in output if isinstance(item, dict) and "url" in item]
                 yield f"data: {json.dumps({'type': 'search_results', 'urls': urls})}\n\n"
-    
-    # Send an end event
+
+    # Update updated_at for existing conversations so sidebar order refreshes
+    if not is_new_conversation:
+        db = next(get_db())
+        try:
+            conv = db.get(Conversation, active_checkpoint_id)
+            if conv:
+                conv.updated_at = datetime.now(timezone.utc)
+                db.commit()
+        finally:
+            db.close()
+
     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-@app.get("/chat_stream/{message}")
-async def chat_stream(message: str, checkpoint_id: Optional[str] = Query(None)):  #message: str --> This syntax is Pydantic which is used for data validations and serialization
-    return StreamingResponse(
-        generate_chat_responses(message, checkpoint_id), 
-        media_type="text/event-stream"
-    )
 
-# SSE - server-sent events 
+@app.get("/chat_stream/{message}")
+async def chat_stream(message: str, checkpoint_id: Optional[str] = Query(None)):
+    return StreamingResponse(
+        generate_chat_responses(message, checkpoint_id),
+        media_type="text/event-stream",
+    )
