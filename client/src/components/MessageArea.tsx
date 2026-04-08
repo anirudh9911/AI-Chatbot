@@ -1,8 +1,50 @@
 import { Message, SearchInfo } from '@/types/types';
-import React from 'react';
-
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
+
+/** Renders fenced code blocks with syntax highlighting and a copy button. */
+const CodeBlock = ({ className, children }: { className?: string; children?: React.ReactNode }) => {
+    const [copied, setCopied] = useState(false);
+    const language = className?.replace('language-', '') || 'text';
+    const code = String(children).replace(/\n$/, '');
+
+    const handleCopy = () => {
+        navigator.clipboard.writeText(code);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    return (
+        <div className="my-3 rounded-lg overflow-hidden border border-gray-700 text-sm">
+            {/* Header bar: language label + copy button */}
+            <div className="flex items-center justify-between bg-gray-800 px-4 py-1.5">
+                <span className="text-xs text-gray-400 font-mono">{language}</span>
+                <button
+                    onClick={handleCopy}
+                    className="text-xs text-gray-400 hover:text-white transition-colors duration-150 flex items-center gap-1"
+                >
+                    {copied ? (
+                        <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Copied!</>
+                    ) : (
+                        <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>Copy</>
+                    )}
+                </button>
+            </div>
+            {/* Syntax highlighted code */}
+            <SyntaxHighlighter
+                language={language}
+                style={oneDark}
+                customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.8rem' }}
+                showLineNumbers={code.split('\n').length > 4}
+            >
+                {code}
+            </SyntaxHighlighter>
+        </div>
+    );
+};
 
 interface SearchStagesProps {
     searchInfo : SearchInfo
@@ -150,14 +192,30 @@ const MessageArea = ({ messages } : MessageAreaProps) => {
                                     <PremiumTypingAnimation />
                                 ) : (
                                     message.content ? (
-                                            <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:underline">
+                                            <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:underline prose-pre:p-0 prose-pre:bg-transparent">
                                             <ReactMarkdown
                                                 components={{
-                                                a: ({ node: _node, ...props }) =>
-                                                    <a {...props} 
-                                                        target="_blank" 
-                                                        rel="noopener noreferrer" 
-                                                        className="text-blue-600 underline hover:text-blue-800"/>
+                                                    a: ({ node: _node, ...props }) =>
+                                                        <a {...props}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="text-blue-600 underline hover:text-blue-800" />,
+                                                    // Block code (fenced with ```)
+                                                    code({ className, children, ...props }) {
+                                                        const isBlock = className?.startsWith('language-');
+                                                        if (isBlock) {
+                                                            return <CodeBlock className={className}>{children}</CodeBlock>;
+                                                        }
+                                                        // Inline code
+                                                        return (
+                                                            <code
+                                                                className="bg-gray-100 text-rose-600 px-1.5 py-0.5 rounded text-xs font-mono"
+                                                                {...props}
+                                                            >
+                                                                {children}
+                                                            </code>
+                                                        );
+                                                    }
                                                 }}
                                             >
                                                 {message.content}
