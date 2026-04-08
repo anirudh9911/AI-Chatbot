@@ -7,7 +7,6 @@ import ConversationSidebar from '@/components/ConversationSidebar';
 import { Conversation, Message, SearchInfo } from '@/types/types';
 import React, { useState, useEffect } from 'react';
 
-// Read API base from environment — works locally and inside Docker
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const WELCOME_MESSAGE: Message = {
@@ -24,7 +23,10 @@ const Home = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
 
-  /** Fetch conversation list from server — populates the sidebar. */
+  // Stores full message history per conversation (keyed by thread_id).
+  // This is what lets us restore the UI when switching between past conversations.
+  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>({});
+
   const fetchConversations = async () => {
     try {
       const res = await fetch(`${API_BASE}/conversations`);
@@ -37,84 +39,89 @@ const Home = () => {
     }
   };
 
-  // Load conversations once on mount
   useEffect(() => {
     fetchConversations();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
+   * Wrapper that updates both the visible messages AND the per-conversation
+   * history map in a single atomic state update, so they never go out of sync.
+   */
+  const updateMessages = (threadId: string, updater: (prev: Message[]) => Message[]) => {
+    setMessages(prev => {
+      const updated = updater(prev);
+      setConversationMessages(map => ({ ...map, [threadId]: updated }));
+      return updated;
+    });
+  };
+
+  /**
    * Switch to an existing conversation.
-   * The UI resets to a clean welcome state; the LLM retains full context
+   * Restores saved UI messages for that thread. The LLM retains full context
    * server-side via LangGraph's MemorySaver checkpoint.
    */
   const handleSelectConversation = (threadId: string) => {
     setCheckpointId(threadId);
-    setMessages([WELCOME_MESSAGE]);
+    setMessages(conversationMessages[threadId] || [WELCOME_MESSAGE]);
   };
 
   /** Start a fresh conversation — server will assign a new checkpoint ID. */
   const handleNewChat = () => {
     setCheckpointId(null);
     setMessages([WELCOME_MESSAGE]);
+    // Keep conversationMessages intact so history of past chats is preserved
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (currentMessage.trim()) {
-      const newMessageId = messages.length > 0 ? Math.max(...messages.map(msg => msg.id)) + 1 : 1;
+    if (!currentMessage.trim()) return;
 
-      setMessages(prev => [
-        ...prev,
-        {
-          id: newMessageId,
-          content: currentMessage,
-          isUser: true,
-          type: 'message'
-        }
-      ]);
+    const newMessageId = messages.length > 0 ? Math.max(...messages.map(msg => msg.id)) + 1 : 1;
+    const aiResponseId = newMessageId + 1;
 
-      const userInput = currentMessage;
-      setCurrentMessage("");
+    // Add user message immediately
+    setMessages(prev => [
+      ...prev,
+      { id: newMessageId, content: currentMessage, isUser: true, type: 'message' }
+    ]);
 
-      try {
-        const aiResponseId = newMessageId + 1;
-        setMessages(prev => [
-          ...prev,
-          {
-            id: aiResponseId,
-            content: "",
-            isUser: false,
-            type: 'message',
-            isLoading: true,
-            searchInfo: {
-              stages: [],
-              query: "",
-              urls: []
-            }
+    const userInput = currentMessage;
+    setCurrentMessage("");
+
+    // Add AI placeholder
+    setMessages(prev => [
+      ...prev,
+      { id: aiResponseId, content: "", isUser: false, type: 'message', isLoading: true, searchInfo: { stages: [], query: "", urls: [] } }
+    ]);
+
+    try {
+      let url = `${API_BASE}/chat_stream/${encodeURIComponent(userInput)}`;
+      if (checkpointId) {
+        url += `?checkpoint_id=${encodeURIComponent(checkpointId)}`;
+      }
+
+      const eventSource = new EventSource(url);
+      let streamedContent = "";
+      let searchData: SearchInfo | null = null;
+
+      // Tracks the active thread ID within this stream.
+      // For new conversations, this gets set when the 'checkpoint' event arrives.
+      let activeCheckpointId = checkpointId;
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'checkpoint') {
+            // New conversation — capture the server-assigned thread ID
+            activeCheckpointId = data.checkpoint_id;
+            setCheckpointId(data.checkpoint_id);
           }
-        ]);
-
-        let url = `${API_BASE}/chat_stream/${encodeURIComponent(userInput)}`;
-        if (checkpointId) {
-          url += `?checkpoint_id=${encodeURIComponent(checkpointId)}`;
-        }
-
-        const eventSource = new EventSource(url);
-        let streamedContent = "";
-        let searchData: SearchInfo | null = null;
-
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-
-            if (data.type === 'checkpoint') {
-              setCheckpointId(data.checkpoint_id);
-            }
-            else if (data.type === 'content') {
-              streamedContent += data.content;
-
-              setMessages(prev =>
+          else if (data.type === 'content') {
+            streamedContent += data.content;
+            if (activeCheckpointId) {
+              updateMessages(activeCheckpointId, prev =>
                 prev.map(msg =>
                   msg.id === aiResponseId
                     ? { ...msg, content: streamedContent, isLoading: false }
@@ -122,123 +129,108 @@ const Home = () => {
                 )
               );
             }
-            else if (data.type === 'search_start') {
-              const newSearchInfo: SearchInfo = {
-                stages: ['searching'],
-                query: data.query,
-                urls: []
-              };
-              searchData = newSearchInfo;
-
-              setMessages(prev =>
+          }
+          else if (data.type === 'search_start') {
+            const newSearchInfo: SearchInfo = { stages: ['searching'], query: data.query, urls: [] };
+            searchData = newSearchInfo;
+            if (activeCheckpointId) {
+              updateMessages(activeCheckpointId, prev =>
                 prev.map(msg =>
                   msg.id === aiResponseId
-                    ? { ...msg, content: streamedContent, searchInfo: newSearchInfo, isLoading: false }
+                    ? { ...msg, searchInfo: newSearchInfo, isLoading: false }
                     : msg
                 )
               );
             }
-            else if (data.type === 'search_results') {
-              try {
-                const urls = typeof data.urls === 'string' ? JSON.parse(data.urls) : data.urls;
-
-                const newSearchInfo: SearchInfo = {
-                  stages: searchData ? [...searchData.stages, 'reading'] : ['reading'],
-                  query: searchData?.query || "",
-                  urls: urls
-                };
-                searchData = newSearchInfo;
-
-                setMessages(prev =>
-                  prev.map(msg =>
-                    msg.id === aiResponseId
-                      ? { ...msg, content: streamedContent, searchInfo: newSearchInfo, isLoading: false }
-                      : msg
-                  )
-                );
-              } catch (err) {
-                console.error("Error parsing search results:", err);
-              }
-            }
-            else if (data.type === 'search_error') {
+          }
+          else if (data.type === 'search_results') {
+            try {
+              const urls = typeof data.urls === 'string' ? JSON.parse(data.urls) : data.urls;
               const newSearchInfo: SearchInfo = {
-                stages: searchData ? [...searchData.stages, 'error'] : ['error'],
+                stages: searchData ? [...searchData.stages, 'reading'] : ['reading'],
                 query: searchData?.query || "",
-                error: data.error,
-                urls: []
+                urls
               };
               searchData = newSearchInfo;
-
-              setMessages(prev =>
-                prev.map(msg =>
-                  msg.id === aiResponseId
-                    ? { ...msg, content: streamedContent, searchInfo: newSearchInfo, isLoading: false }
-                    : msg
-                )
-              );
-            }
-            else if (data.type === 'end') {
-              if (searchData) {
-                const finalSearchInfo: SearchInfo = {
-                  ...searchData,
-                  stages: [...searchData.stages, 'writing']
-                };
-
-                setMessages(prev =>
+              if (activeCheckpointId) {
+                updateMessages(activeCheckpointId, prev =>
                   prev.map(msg =>
                     msg.id === aiResponseId
-                      ? { ...msg, searchInfo: finalSearchInfo, isLoading: false }
+                      ? { ...msg, searchInfo: newSearchInfo, isLoading: false }
                       : msg
                   )
                 );
               }
-
-              eventSource.close();
-
-              // Refresh sidebar so the new/updated conversation appears immediately
-              fetchConversations();
+            } catch (err) {
+              console.error("Error parsing search results:", err);
             }
-          } catch (error) {
-            console.error("Error parsing event data:", error, event.data);
           }
-        };
-
-        eventSource.onerror = (error) => {
-          console.error("EventSource error:", error);
-          eventSource.close();
-
-          if (!streamedContent) {
-            setMessages(prev =>
-              prev.map(msg =>
-                msg.id === aiResponseId
-                  ? { ...msg, content: "Sorry, there was an error processing your request.", isLoading: false }
-                  : msg
-              )
-            );
+          else if (data.type === 'search_error') {
+            const newSearchInfo: SearchInfo = {
+              stages: searchData ? [...searchData.stages, 'error'] : ['error'],
+              query: searchData?.query || "",
+              error: data.error,
+              urls: []
+            };
+            searchData = newSearchInfo;
+            if (activeCheckpointId) {
+              updateMessages(activeCheckpointId, prev =>
+                prev.map(msg =>
+                  msg.id === aiResponseId
+                    ? { ...msg, searchInfo: newSearchInfo, isLoading: false }
+                    : msg
+                )
+              );
+            }
           }
-        };
-
-        eventSource.addEventListener('end', () => {
-          eventSource.close();
-        });
-      } catch (error) {
-        console.error("Error setting up EventSource:", error);
-        setMessages(prev => [
-          ...prev,
-          {
-            id: newMessageId + 1,
-            content: "Sorry, there was an error connecting to the server.",
-            isUser: false,
-            type: 'message',
-            isLoading: false
+          else if (data.type === 'end') {
+            if (searchData && activeCheckpointId) {
+              const finalSearchInfo: SearchInfo = {
+                ...searchData,
+                stages: [...searchData.stages, 'writing']
+              };
+              updateMessages(activeCheckpointId, prev =>
+                prev.map(msg =>
+                  msg.id === aiResponseId
+                    ? { ...msg, searchInfo: finalSearchInfo, isLoading: false }
+                    : msg
+                )
+              );
+            }
+            eventSource.close();
+            fetchConversations();
           }
-        ]);
-      }
+        } catch (error) {
+          console.error("Error parsing event data:", error, event.data);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error("EventSource error:", error);
+        eventSource.close();
+        if (!streamedContent) {
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === aiResponseId
+                ? { ...msg, content: "Sorry, there was an error processing your request.", isLoading: false }
+                : msg
+            )
+          );
+        }
+      };
+
+      eventSource.addEventListener('end', () => { eventSource.close(); });
+
+    } catch (error) {
+      console.error("Error setting up EventSource:", error);
+      setMessages(prev => [
+        ...prev,
+        { id: newMessageId + 1, content: "Sorry, there was an error connecting to the server.", isUser: false, type: 'message', isLoading: false }
+      ]);
     }
   };
 
   return (
-    // Two-column layout: sidebar on the left, chat on the right
     <div className="flex bg-gray-100 min-h-screen">
       <ConversationSidebar
         conversations={conversations}
@@ -248,7 +240,6 @@ const Home = () => {
         isLoading={isLoadingConversations}
       />
 
-      {/* Chat panel */}
       <div className="flex-1 flex justify-center py-8 px-4">
         <div className="w-full max-w-3xl bg-white flex flex-col rounded-xl shadow-lg border border-gray-100 overflow-hidden h-[90vh]">
           <Header />
