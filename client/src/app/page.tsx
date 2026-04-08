@@ -17,44 +17,42 @@ const WELCOME_MESSAGE: Message = {
 };
 
 const Home = () => {
-  // Initialize state from localStorage on first render so history
-  // survives page refreshes. Falls back to defaults if nothing stored.
-  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>(() => {
-    try {
-      const stored = localStorage.getItem('inquiro_messages');
-      return stored ? JSON.parse(stored) : {};
-    } catch { return {}; }
-  });
-
-  const [checkpointId, setCheckpointId] = useState<string | null>(() => {
-    try { return localStorage.getItem('inquiro_checkpoint'); }
-    catch { return null; }
-  });
-
-  // Restore the last active conversation's messages on load
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const storedId = localStorage.getItem('inquiro_checkpoint');
-      const storedMessages = localStorage.getItem('inquiro_messages');
-      if (storedId && storedMessages) {
-        const map = JSON.parse(storedMessages) as Record<string, Message[]>;
-        return map[storedId] || [WELCOME_MESSAGE];
-      }
-    } catch { /* fall through */ }
-    return [WELCOME_MESSAGE];
-  });
-
+  // Start with defaults — identical on server and client.
+  // localStorage is read only after hydration (in useEffect) to avoid mismatch.
+  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>({});
+  const [checkpointId, setCheckpointId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [currentMessage, setCurrentMessage] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
 
-  // Persist message history to localStorage whenever it changes
+  // Runs once, client-side only, after hydration — safe to access localStorage.
+  // Restores the last active conversation and all message histories.
   useEffect(() => {
+    try {
+      const storedId = localStorage.getItem('inquiro_checkpoint');
+      const storedMessages = localStorage.getItem('inquiro_messages');
+      const parsedMap: Record<string, Message[]> = storedMessages
+        ? JSON.parse(storedMessages)
+        : {};
+
+      setConversationMessages(parsedMap);
+
+      if (storedId) {
+        setCheckpointId(storedId);
+        setMessages(parsedMap[storedId] || [WELCOME_MESSAGE]);
+      }
+    } catch { /* localStorage unavailable — start fresh */ }
+  }, []);
+
+  // Persist message history whenever it changes (skip empty initial state)
+  useEffect(() => {
+    if (Object.keys(conversationMessages).length === 0) return;
     try { localStorage.setItem('inquiro_messages', JSON.stringify(conversationMessages)); }
     catch { /* storage quota exceeded — fail silently */ }
   }, [conversationMessages]);
 
-  // Persist active checkpoint to localStorage whenever it changes
+  // Persist active checkpoint whenever it changes
   useEffect(() => {
     try {
       if (checkpointId) localStorage.setItem('inquiro_checkpoint', checkpointId);
