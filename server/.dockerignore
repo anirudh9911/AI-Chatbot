@@ -1,0 +1,20 @@
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv
+venv
+env
+
+# Secrets and local config
+.env
+
+# Database files (mounted via volume in production)
+*.db
+data/
+
+# Jupyter notebooks (not needed in the container)
+*.ipynb
+.ipynb_checkpoints
