@@ -1,0 +1,41 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      # Tighten CORS to only allow the client origin
+      - ALLOWED_ORIGINS=http://localhost:3000
+      # SQLite file lives in the mounted volume so data survives restarts
+      - DATABASE_URL=sqlite:///./data/inquiro.db
+    volumes:
+      - db_data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # Points the browser at the host-exposed server port
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # Named volume persists the SQLite database across container restarts
+  db_data:
