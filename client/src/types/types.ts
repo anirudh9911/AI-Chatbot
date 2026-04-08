@@ -21,3 +21,10 @@ export interface Message {
   isLoading?: boolean;
   searchInfo?: SearchInfo;
 }
+
+export interface Conversation {
+  thread_id: string;   // matches LangGraph checkpoint ID
+  title: string;       // first user message, truncated to 80 chars
+  created_at: string;  // ISO 8601 timestamp
+  updated_at: string;  // ISO 8601 timestamp — used to sort sidebar
+}

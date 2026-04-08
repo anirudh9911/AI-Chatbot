@@ -1,30 +1,67 @@
 "use client"
 
-
 import Header from '@/components/Header';
 import InputBar from '@/components/InputBar';
 import MessageArea from '@/components/MessageArea';
-import { Message, SearchInfo } from '@/types/types';
-import React, { useState } from 'react';
+import ConversationSidebar from '@/components/ConversationSidebar';
+import { Conversation, Message, SearchInfo } from '@/types/types';
+import React, { useState, useEffect } from 'react';
 
+// Read API base from environment — works locally and inside Docker
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+const WELCOME_MESSAGE: Message = {
+  id: 1,
+  content: 'Hi there, how can I help you?',
+  isUser: false,
+  type: 'message'
+};
 
 const Home = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      content: 'Hi there, how can I help you?',
-      isUser: false,
-      type: 'message'
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [currentMessage, setCurrentMessage] = useState("");
-  const [checkpointId, setCheckpointId] = useState(null);
+  const [checkpointId, setCheckpointId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+
+  /** Fetch conversation list from server — populates the sidebar. */
+  const fetchConversations = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/conversations`);
+      const data: Conversation[] = await res.json();
+      setConversations(data);
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  };
+
+  // Load conversations once on mount
+  useEffect(() => {
+    fetchConversations();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Switch to an existing conversation.
+   * The UI resets to a clean welcome state; the LLM retains full context
+   * server-side via LangGraph's MemorySaver checkpoint.
+   */
+  const handleSelectConversation = (threadId: string) => {
+    setCheckpointId(threadId);
+    setMessages([WELCOME_MESSAGE]);
+  };
+
+  /** Start a fresh conversation — server will assign a new checkpoint ID. */
+  const handleNewChat = () => {
+    setCheckpointId(null);
+    setMessages([WELCOME_MESSAGE]);
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (currentMessage.trim()) {
-      // First add the user message to the chat
       const newMessageId = messages.length > 0 ? Math.max(...messages.map(msg => msg.id)) + 1 : 1;
 
       setMessages(prev => [
@@ -38,10 +75,9 @@ const Home = () => {
       ]);
 
       const userInput = currentMessage;
-      setCurrentMessage(""); // Clear input field immediately
+      setCurrentMessage("");
 
       try {
-        // Create AI response placeholder
         const aiResponseId = newMessageId + 1;
         setMessages(prev => [
           ...prev,
@@ -59,30 +95,25 @@ const Home = () => {
           }
         ]);
 
-        // Create URL with checkpoint ID if it exists
-        let url = `http://127.0.0.1:8000/chat_stream/${encodeURIComponent(userInput)}`;
+        let url = `${API_BASE}/chat_stream/${encodeURIComponent(userInput)}`;
         if (checkpointId) {
           url += `?checkpoint_id=${encodeURIComponent(checkpointId)}`;
         }
 
-        // Connect to SSE endpoint using EventSource
         const eventSource = new EventSource(url);
         let streamedContent = "";
         let searchData: SearchInfo | null = null;
 
-        // Process incoming messages
         eventSource.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
 
             if (data.type === 'checkpoint') {
-              // Store the checkpoint ID for future requests
               setCheckpointId(data.checkpoint_id);
             }
             else if (data.type === 'content') {
               streamedContent += data.content;
 
-              // Update message with accumulated content
               setMessages(prev =>
                 prev.map(msg =>
                   msg.id === aiResponseId
@@ -92,15 +123,13 @@ const Home = () => {
               );
             }
             else if (data.type === 'search_start') {
-              // Create search info with 'searching' stage
-              const newSearchInfo = {
+              const newSearchInfo: SearchInfo = {
                 stages: ['searching'],
                 query: data.query,
                 urls: []
               };
               searchData = newSearchInfo;
 
-              // Update the AI message with search info
               setMessages(prev =>
                 prev.map(msg =>
                   msg.id === aiResponseId
@@ -111,18 +140,15 @@ const Home = () => {
             }
             else if (data.type === 'search_results') {
               try {
-                // Parse URLs from search results
                 const urls = typeof data.urls === 'string' ? JSON.parse(data.urls) : data.urls;
 
-                // Update search info to add 'reading' stage (don't replace 'searching')
-                const newSearchInfo = {
+                const newSearchInfo: SearchInfo = {
                   stages: searchData ? [...searchData.stages, 'reading'] : ['reading'],
                   query: searchData?.query || "",
                   urls: urls
                 };
                 searchData = newSearchInfo;
 
-                // Update the AI message with search info
                 setMessages(prev =>
                   prev.map(msg =>
                     msg.id === aiResponseId
@@ -135,8 +161,7 @@ const Home = () => {
               }
             }
             else if (data.type === 'search_error') {
-              // Handle search error
-              const newSearchInfo = {
+              const newSearchInfo: SearchInfo = {
                 stages: searchData ? [...searchData.stages, 'error'] : ['error'],
                 query: searchData?.query || "",
                 error: data.error,
@@ -153,9 +178,8 @@ const Home = () => {
               );
             }
             else if (data.type === 'end') {
-              // When stream ends, add 'writing' stage if we had search info
               if (searchData) {
-                const finalSearchInfo = {
+                const finalSearchInfo: SearchInfo = {
                   ...searchData,
                   stages: [...searchData.stages, 'writing']
                 };
@@ -170,18 +194,19 @@ const Home = () => {
               }
 
               eventSource.close();
+
+              // Refresh sidebar so the new/updated conversation appears immediately
+              fetchConversations();
             }
           } catch (error) {
             console.error("Error parsing event data:", error, event.data);
           }
         };
 
-        // Handle errors
         eventSource.onerror = (error) => {
           console.error("EventSource error:", error);
           eventSource.close();
 
-          // Only update with error if we don't have content yet
           if (!streamedContent) {
             setMessages(prev =>
               prev.map(msg =>
@@ -193,7 +218,6 @@ const Home = () => {
           }
         };
 
-        // Listen for end event
         eventSource.addEventListener('end', () => {
           eventSource.close();
         });
@@ -214,12 +238,23 @@ const Home = () => {
   };
 
   return (
-    <div className="flex justify-center bg-gray-100 min-h-screen py-8 px-4">
-      {/* Main container with refined shadow and border */}
-      <div className="w-[70%] bg-white flex flex-col rounded-xl shadow-lg border border-gray-100 overflow-hidden h-[90vh]">
-        <Header />
-        <MessageArea messages={messages} />
-        <InputBar currentMessage={currentMessage} setCurrentMessage={setCurrentMessage} onSubmit={handleSubmit} />
+    // Two-column layout: sidebar on the left, chat on the right
+    <div className="flex bg-gray-100 min-h-screen">
+      <ConversationSidebar
+        conversations={conversations}
+        activeId={checkpointId}
+        onSelect={handleSelectConversation}
+        onNewChat={handleNewChat}
+        isLoading={isLoadingConversations}
+      />
+
+      {/* Chat panel */}
+      <div className="flex-1 flex justify-center py-8 px-4">
+        <div className="w-full max-w-3xl bg-white flex flex-col rounded-xl shadow-lg border border-gray-100 overflow-hidden h-[90vh]">
+          <Header />
+          <MessageArea messages={messages} />
+          <InputBar currentMessage={currentMessage} setCurrentMessage={setCurrentMessage} onSubmit={handleSubmit} />
+        </div>
       </div>
     </div>
   );
