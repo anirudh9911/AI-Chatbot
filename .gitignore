@@ -46,5 +46,9 @@ __pycache__/
 *$py.class
 venv/
 
+# SQLite database (runtime data, never commit)
+data/
+*.db
+
 # OS files
 .DS_Store

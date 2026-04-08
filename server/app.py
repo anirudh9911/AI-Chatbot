@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Annotated, Optional
 from uuid import uuid4
 
@@ -40,8 +40,34 @@ llm = ChatOpenAI(model="gpt-4o")
 llm_with_tools = llm.bind_tools(tools=tools)
 
 
+def build_system_prompt() -> str:
+    """
+    Constructs a system prompt with real-time context injected at call time.
+    Called fresh on every model invocation so the date/time is always current.
+    """
+    now = datetime.now(timezone.utc)
+    return (
+        f"You are Inquiro, an intelligent research assistant with access to web search.\n\n"
+        f"CURRENT CONTEXT:\n"
+        f"- Today's date: {date.today().strftime('%B %d, %Y')}\n"
+        f"- Current UTC time: {now.strftime('%H:%M')}\n\n"
+        f"SEARCH TOOL USAGE:\n"
+        f"- Use the search tool for: current events, live data (weather, stocks, sports), "
+        f"recent news, or anything that changes over time.\n"
+        f"- Do NOT search for: timeless facts, math, definitions, or general knowledge "
+        f"that does not change (e.g. 'what is photosynthesis').\n\n"
+        f"RESPONSE GUIDELINES:\n"
+        f"- Be concise and direct. Avoid unnecessary filler phrases.\n"
+        f"- When you use search results, cite the sources naturally in your answer.\n"
+        f"- Format responses with markdown where it improves readability.\n"
+        f"- Never introduce yourself as ChatGPT or any other assistant."
+    )
+
+
 async def model(state: State):
-    result = await llm_with_tools.ainvoke(state["messages"])
+    from langchain_core.messages import SystemMessage
+    system = SystemMessage(content=build_system_prompt())
+    result = await llm_with_tools.ainvoke([system] + state["messages"])
     return {"messages": [result]}
 
 
