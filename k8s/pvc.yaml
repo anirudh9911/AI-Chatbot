@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sqlite-pvc
+  namespace: inquiro
+spec:
+  accessModes:
+    # ReadWriteOnce = one node at a time. Correct for SQLite which is
+    # single-writer. If we scaled to multiple replicas we'd need PostgreSQL.
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

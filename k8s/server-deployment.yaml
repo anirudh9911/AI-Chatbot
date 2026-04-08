@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  namespace: inquiro
+  labels:
+    app: server
+spec:
+  # replicas: 1 is intentional — SQLite is single-writer.
+  # Scaling to N replicas requires migrating to a client-server DB (PostgreSQL).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: server
+  template:
+    metadata:
+      labels:
+        app: server
+    spec:
+      containers:
+        - name: server
+          image: inquiro-server:latest
+          # Never pull cached image — use exact digest in production
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            # Non-sensitive config from ConfigMap
+            - configMapRef:
+                name: inquiro-config
+            # API keys from Secret (injected as env vars, not baked into image)
+            - secretRef:
+                name: inquiro-secrets
+          # Readiness probe: K8s won't route traffic until /health returns 200.
+          # This is the same pattern as the Docker Compose healthcheck.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Liveness probe: K8s restarts the pod if it stops responding.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: sqlite-storage
+              mountPath: /app/data
+      volumes:
+        - name: sqlite-storage
+          persistentVolumeClaim:
+            claimName: sqlite-pvc

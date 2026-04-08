@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inquiro-config
+  namespace: inquiro
+data:
+  # Non-sensitive environment variables shared across services.
+  # Secrets (API keys) live in secret.yaml — never here.
+  ALLOWED_ORIGINS: "http://localhost:3000"
+  DATABASE_URL: "sqlite:///./data/inquiro.db"
+  NEXT_PUBLIC_API_URL: "http://server-svc:8000"

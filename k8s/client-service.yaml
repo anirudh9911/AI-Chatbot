@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: client-svc
+  namespace: inquiro
+spec:
+  # NodePort exposes the client on every cluster node's IP.
+  # On OpenShift you'd replace this with a Route object instead.
+  type: NodePort
+  selector:
+    app: client
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30000

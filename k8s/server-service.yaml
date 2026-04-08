@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-svc
+  namespace: inquiro
+spec:
+  # ClusterIP = internal only. The client pod reaches the server via
+  # http://server-svc:8000 (DNS resolved by kube-dns). Never exposed externally.
+  type: ClusterIP
+  selector:
+    app: server
+  ports:
+    - port: 8000
+      targetPort: 8000
