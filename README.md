@@ -9,8 +9,12 @@ Inquiro is a production-grade AI chatbot that combines GPT-4o with real-time web
 ```
 Browser
   │
-  ├── localhost:3000  →  Next.js UI (served from client pod via NodePort)
-  └── localhost:8000  →  FastAPI server (via kubectl port-forward)
+  └── localhost:3000  →  Next.js client pod (NodePort)
+                              │
+                    /api/* requests proxied
+                    internally via Route Handler
+                              │
+                         server-svc:8000  (ClusterIP)
                               │
                         LangGraph state machine
                               │
@@ -22,6 +26,8 @@ Browser
                               │
                        SSE stream → browser
 ```
+
+All browser traffic goes through **one port (3000)**. The Next.js server proxies `/api/*` requests to the FastAPI server pod internally via Kubernetes ClusterIP DNS — no `kubectl port-forward` needed.
 
 ### Tech Stack
 
@@ -54,7 +60,10 @@ Browser
 ├── client/                     # Next.js frontend
 │   ├── src/
 │   │   ├── app/
-│   │   │   └── page.tsx        # Main page — layout, state, SSE event handling
+│   │   │   ├── api/
+│   │   │   │   └── [...path]/
+│   │   │   │       └── route.ts  # Catch-all proxy — forwards /api/* to server pod at runtime
+│   │   │   └── page.tsx          # Main page — layout, state, SSE event handling
 │   │   ├── components/
 │   │   │   ├── ConversationSidebar.tsx  # Chat history sidebar with rename/delete
 │   │   │   ├── MessageArea.tsx          # Message rendering, syntax highlighting, edit
@@ -67,7 +76,7 @@ Browser
 │
 ├── k8s/                        # Kubernetes manifests
 │   ├── namespace.yaml
-│   ├── configmap.yaml          # Non-secret env vars
+│   ├── configmap.yaml          # Non-secret env vars (incl. INTERNAL_API_URL)
 │   ├── pvc.yaml                # 1Gi PVC for SQLite database
 │   ├── server-deployment.yaml  # FastAPI (readiness + liveness probes)
 │   ├── server-service.yaml     # ClusterIP — internal only
@@ -115,6 +124,21 @@ Browser
 
 ## How It Works
 
+### Request Flow
+
+```
+1. Browser loads http://localhost:3000
+   → Kind NodePort (30000) → client pod → Next.js serves HTML/JS
+
+2. Browser sends chat message to /api/chat_stream?message=...
+   → client pod (Next.js Route Handler at /api/[...path])
+   → server-svc:8000 via ClusterIP DNS (pod-to-pod, internal)
+   → FastAPI streams SSE tokens back through the same path
+   → Browser receives tokens one-by-one → words appear as they stream
+```
+
+The browser only ever talks to port 3000. The server pod is never exposed externally.
+
 ### LangGraph State Machine
 
 ```
@@ -147,13 +171,22 @@ Built fresh on every model invocation with:
 
 ### Persistence Architecture
 
-Two separate stores for two different concerns:
-
-| What | Where | Survives server restart? |
+| What | Where | Survives server pod restart? |
 |---|---|---|
 | LLM conversation context | LangGraph `MemorySaver` (in-RAM) | No |
 | Conversation metadata (title, timestamps) | SQLite on Kubernetes PVC | Yes |
 | Message history for UI | Browser `localStorage` | Yes (browser only) |
+
+**localhost:3000 availability:**
+
+| Event | UI available? | LLM context retained? |
+|---|---|---|
+| Close terminal | Yes | Yes |
+| Laptop sleep | Yes | Yes |
+| Reload server image | Yes | No — pod restarted |
+| Reload client image | Brief downtime (~10s) | Yes |
+| `kind delete cluster` | No | No |
+| Laptop restart | No (until Docker starts) | No |
 
 **Production upgrade path:** Replace `MemorySaver` with `AsyncPostgresSaver` from `langgraph-checkpoint-postgres` — 3 lines of code change. The PVC is already sized to accommodate a Postgres pod in the same namespace.
 
@@ -195,19 +228,16 @@ kubectl apply -f k8s/client-service.yaml
 # 4. Create secrets from server/.env
 bash k8s/setup-secrets.sh
 
-# 5. Expose the server to the browser (keep this terminal open)
-kubectl port-forward svc/server-svc 8000:8000 -n inquiro
-
-# App available at http://localhost:3000
-```
-
-To verify pods are running:
-```bash
+# Verify pods are running
 kubectl get pods -n inquiro
 # NAME              READY   STATUS    RESTARTS
 # client-xxxx       1/1     Running   0
 # server-xxxx       1/1     Running   0
+
+# App available at http://localhost:3000 — no port-forward needed
 ```
+
+**After a laptop restart:** Open Docker Desktop, wait ~15 seconds, then open http://localhost:3000.
 
 Teardown:
 ```bash
@@ -218,7 +248,7 @@ kind delete cluster --name inquiro-cluster
 
 ## Environment Variables
 
-Create `server/.env` (copy from `server/.env.example`):
+### server/.env (copy from server/.env.example)
 
 ```env
 OPENAI_API_KEY=sk-...
@@ -226,6 +256,15 @@ TAVILY_API_KEY=tvly-...
 ALLOWED_ORIGINS=http://localhost:3000
 DATABASE_URL=sqlite:///./data/inquiro.db
 ```
+
+### client/.env.local (for local dev without containers)
+
+```env
+INTERNAL_API_URL=http://localhost:8000
+```
+
+In Kubernetes this is set via `configmap.yaml` (`INTERNAL_API_URL=http://server-svc:8000`).
+In docker-compose it is set inline (`INTERNAL_API_URL=http://server:8000`).
 
 ---
 
@@ -244,8 +283,11 @@ GitHub Actions runs 4 parallel jobs on every push:
 
 ## Key Design Decisions
 
+### Why does all traffic go through port 3000?
+The Next.js server acts as a reverse proxy via a catch-all Route Handler (`/api/[...path]/route.ts`). It reads `INTERNAL_API_URL` at request time and forwards to the server pod via ClusterIP DNS. This is better than `next.config.ts` rewrites (which are baked in at build time and can't read runtime env vars like configmap values).
+
 ### Why ClusterIP for the server, not NodePort?
-The server handles API keys and business logic — it should not be directly exposed to the network. ClusterIP keeps it internal. `kubectl port-forward` is the approved dev tool for intentional, temporary access. In production, an Ingress controller (nginx, OpenShift Route) replaces port-forward.
+The server handles API keys and business logic — it should not be directly exposed externally. ClusterIP keeps it internal. The Next.js proxy is the only thing that talks to it, pod-to-pod within the cluster. In production, an Ingress controller (nginx, OpenShift Route) on port 3000 handles everything.
 
 ### Why SQLite and not PostgreSQL?
 Two separate concerns: LangGraph `MemorySaver` owns LLM state; SQLite owns conversation discovery (titles, timestamps). SQLite needs no extra container and is sufficient for single-replica deployments. The `replicas: 1` in the server deployment is intentional — SQLite is single-writer. Scaling horizontally requires migrating to a PostgreSQL checkpointer.
@@ -257,24 +299,26 @@ Three stages: `deps` (npm ci), `builder` (npm run build), `runner` (standalone o
 Conversation metadata (titles) lives in SQLite on the server. But re-fetching all messages from the server on every page load would require storing full message content server-side too. localStorage avoids that complexity while still surviving browser refreshes. It is read in a `useEffect` (not `useState`) to avoid Next.js server/client hydration mismatches.
 
 ### OpenShift compatibility
-All manifests deploy to OpenShift with one change: replace `client-service.yaml` NodePort with a `Route` object. The Route acts as an Ingress — OpenShift's HAProxy router terminates external traffic and forwards to the ClusterIP service. Everything else (deployments, configmap, secrets, PVC) is identical.
+All manifests deploy to OpenShift with one change: replace `client-service.yaml` NodePort with a `Route` object. The Route acts as an Ingress — OpenShift's HAProxy router terminates external traffic and forwards to the ClusterIP service. The Next.js proxy then handles internal routing to the server pod. Everything else (deployments, configmap, secrets, PVC) is identical.
 
 ---
 
 ## API Reference
 
+All requests from the browser go to `/api/*` which the Next.js Route Handler proxies to the FastAPI server.
+
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Health check — used by K8s readiness/liveness probes |
-| `GET` | `/chat_stream?message=...&checkpoint_id=...` | SSE stream for chat responses |
-| `GET` | `/conversations` | List all conversations (ordered by updated_at desc, limit 50) |
-| `GET` | `/conversations/{thread_id}` | Get single conversation |
-| `PATCH` | `/conversations/{thread_id}` | Rename conversation `{"title": "new name"}` |
-| `DELETE` | `/conversations/{thread_id}` | Delete conversation |
+| `GET` | `/api/health` | Health check — used by K8s readiness/liveness probes |
+| `GET` | `/api/chat_stream?message=...&checkpoint_id=...` | SSE stream for chat responses |
+| `GET` | `/api/conversations` | List all conversations (ordered by updated_at desc, limit 50) |
+| `GET` | `/api/conversations/{thread_id}` | Get single conversation |
+| `PATCH` | `/api/conversations/{thread_id}` | Rename conversation `{"title": "new name"}` |
+| `DELETE` | `/api/conversations/{thread_id}` | Delete conversation |
 
 ### SSE Event Types
 
-The `/chat_stream` endpoint emits these event types:
+The `/api/chat_stream` endpoint emits these event types:
 
 | Event type | Payload | When |
 |---|---|---|

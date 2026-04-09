@@ -29,8 +29,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Points the browser at the host-exposed server port
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      # Next.js proxies /api/* to the server container internally.
+      # The browser only talks to port 3000.
+      - INTERNAL_API_URL=http://server:8000
     depends_on:
       server:
         condition: service_healthy

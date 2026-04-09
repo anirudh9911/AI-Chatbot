@@ -7,7 +7,7 @@ import ConversationSidebar from '@/components/ConversationSidebar';
 import { Conversation, Message, SearchInfo } from '@/types/types';
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = "/api";
 
 const WELCOME_MESSAGE: Message = {
   id: 1,

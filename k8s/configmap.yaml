@@ -5,9 +5,8 @@ metadata:
   namespace: inquiro
 data:
   # Non-sensitive environment variables shared across services.
-  # Secrets (API keys) live in secret.yaml — never here.
   ALLOWED_ORIGINS: "http://localhost:3000"
   DATABASE_URL: "sqlite:///./data/inquiro.db"
-  # Server is ClusterIP (internal only). Expose it to the browser via:
-  # kubectl port-forward svc/server-svc 8000:8000 -n inquiro
-  NEXT_PUBLIC_API_URL: "http://localhost:8000"
+  # Next.js proxies /api/* to the server pod internally via ClusterIP DNS.
+  # The browser only ever talks to port 3000 — no port-forward needed.
+  INTERNAL_API_URL: "http://server-svc:8000"
