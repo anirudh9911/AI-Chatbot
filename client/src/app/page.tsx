@@ -163,10 +163,9 @@ const Home = () => {
     }
 
     try {
-      let url = `${API_BASE}/chat_stream/${encodeURIComponent(userInput)}`;
-      if (checkpointId) {
-        url += `?checkpoint_id=${encodeURIComponent(checkpointId)}`;
-      }
+      const params = new URLSearchParams({ message: userInput });
+      if (checkpointId) params.set('checkpoint_id', checkpointId);
+      const url = `${API_BASE}/chat_stream?${params.toString()}`;
 
       const eventSource = new EventSource(url);
       let streamedContent = "";
