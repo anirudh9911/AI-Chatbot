@@ -139,27 +139,28 @@ const Home = () => {
     // Keep conversationMessages intact so history of past chats is preserved
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!currentMessage.trim()) return;
-
-    const newMessageId = messages.length > 0 ? Math.max(...messages.map(msg => msg.id)) + 1 : 1;
+  /**
+   * Core streaming logic. Appends userInput to priorMessages, streams the
+   * server response, and updates state incrementally as tokens arrive.
+   * Used by both handleSubmit and handleEditMessage.
+   */
+  const startStream = async (userInput: string, priorMessages: Message[]) => {
+    const newMessageId = priorMessages.length > 0 ? Math.max(...priorMessages.map(msg => msg.id)) + 1 : 1;
     const aiResponseId = newMessageId + 1;
 
-    // Add user message immediately
-    setMessages(prev => [
-      ...prev,
-      { id: newMessageId, content: currentMessage, isUser: true, type: 'message' }
-    ]);
-
-    const userInput = currentMessage;
-    setCurrentMessage("");
-
-    // Add AI placeholder
-    setMessages(prev => [
-      ...prev,
+    const withUser: Message[] = [
+      ...priorMessages,
+      { id: newMessageId, content: userInput, isUser: true, type: 'message' }
+    ];
+    const withPlaceholder: Message[] = [
+      ...withUser,
       { id: aiResponseId, content: "", isUser: false, type: 'message', isLoading: true, searchInfo: { stages: [], query: "", urls: [] } }
-    ]);
+    ];
+
+    setMessages(withPlaceholder);
+    if (checkpointId) {
+      setConversationMessages(prev => ({ ...prev, [checkpointId]: withPlaceholder }));
+    }
 
     try {
       let url = `${API_BASE}/chat_stream/${encodeURIComponent(userInput)}`;
@@ -170,9 +171,6 @@ const Home = () => {
       const eventSource = new EventSource(url);
       let streamedContent = "";
       let searchData: SearchInfo | null = null;
-
-      // Tracks the active thread ID within this stream.
-      // For new conversations, this gets set when the 'checkpoint' event arrives.
       let activeCheckpointId = checkpointId;
 
       eventSource.onmessage = (event) => {
@@ -180,7 +178,6 @@ const Home = () => {
           const data = JSON.parse(event.data);
 
           if (data.type === 'checkpoint') {
-            // New conversation — capture the server-assigned thread ID
             activeCheckpointId = data.checkpoint_id;
             setCheckpointId(data.checkpoint_id);
           }
@@ -296,6 +293,28 @@ const Home = () => {
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!currentMessage.trim()) return;
+    const userInput = currentMessage;
+    setCurrentMessage("");
+    await startStream(userInput, messages);
+  };
+
+  /**
+   * Truncates the conversation to everything before the edited message,
+   * then resends the edited text as a new message.
+   */
+  const handleEditMessage = (messageId: number, newContent: string) => {
+    const idx = messages.findIndex(m => m.id === messageId);
+    if (idx === -1) return;
+    const truncated = messages.slice(0, idx);
+    if (checkpointId) {
+      setConversationMessages(prev => ({ ...prev, [checkpointId]: truncated }));
+    }
+    startStream(newContent, truncated);
+  };
+
   return (
     <div className="flex bg-gray-100 min-h-screen">
       <ConversationSidebar
@@ -311,7 +330,7 @@ const Home = () => {
       <div className="flex-1 flex justify-center py-8 px-4">
         <div className="w-full max-w-3xl bg-white flex flex-col rounded-xl shadow-lg border border-gray-100 overflow-hidden h-[90vh]">
           <Header />
-          <MessageArea messages={messages} />
+          <MessageArea messages={messages} onEditMessage={handleEditMessage} />
           <InputBar currentMessage={currentMessage} setCurrentMessage={setCurrentMessage} onSubmit={handleSubmit} />
         </div>
       </div>

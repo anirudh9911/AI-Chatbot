@@ -164,12 +164,26 @@ const SearchStages = ({ searchInfo }: SearchStagesProps)  => {
 
 interface MessageAreaProps {
   messages: Message[];
+  onEditMessage?: (messageId: number, newContent: string) => void;
 }
 
+const PencilIcon = () => (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+    </svg>
+);
 
+const MessageArea = ({ messages, onEditMessage } : MessageAreaProps) => {
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const [editContent, setEditContent] = useState("");
 
+    const handleConfirmEdit = (messageId: number) => {
+        if (editContent.trim() && onEditMessage) {
+            onEditMessage(messageId, editContent.trim());
+        }
+        setEditingId(null);
+    };
 
-const MessageArea = ({ messages } : MessageAreaProps) => {
     return (
         <div className="flex-grow overflow-y-auto bg-[#FCFCF8] border-b border-gray-100" style={{ minHeight: 0 }}>
             <div className="max-w-4xl mx-auto p-6">
@@ -181,51 +195,92 @@ const MessageArea = ({ messages } : MessageAreaProps) => {
                                 <SearchStages searchInfo={message.searchInfo} />
                             )}
 
-                            {/* Message Content */}
-                            <div
-                                className={`rounded-lg py-3 px-5 ${message.isUser
-                                    ? 'bg-gradient-to-br from-[#5E507F] to-[#4A3F71] text-white rounded-br-none shadow-md'
-                                    : 'bg-[#F3F3EE] text-gray-800 border border-gray-200 rounded-bl-none shadow-sm'
-                                    }`}
-                            >
-                                {message.isLoading ? (
-                                    <PremiumTypingAnimation />
-                                ) : (
-                                    message.content ? (
-                                            <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:underline prose-pre:p-0 prose-pre:bg-transparent">
-                                            <ReactMarkdown
-                                                components={{
-                                                    a: ({ node: _node, ...props }) =>
-                                                        <a {...props}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            className="text-blue-600 underline hover:text-blue-800" />,
-                                                    // Block code (fenced with ```)
-                                                    code({ className, children, ...props }) {
-                                                        const isBlock = className?.startsWith('language-');
-                                                        if (isBlock) {
-                                                            return <CodeBlock className={className}>{children}</CodeBlock>;
-                                                        }
-                                                        // Inline code
-                                                        return (
-                                                            <code
-                                                                className="bg-gray-100 text-rose-600 px-1.5 py-0.5 rounded text-xs font-mono"
-                                                                {...props}
-                                                            >
-                                                                {children}
-                                                            </code>
-                                                        );
-                                                    }
-                                                }}
+                            {/* User message: editable on hover */}
+                            {message.isUser ? (
+                                editingId === message.id ? (
+                                    <div className="flex flex-col gap-2">
+                                        <textarea
+                                            value={editContent}
+                                            onChange={e => setEditContent(e.target.value)}
+                                            onKeyDown={e => {
+                                                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleConfirmEdit(message.id); }
+                                                if (e.key === 'Escape') setEditingId(null);
+                                            }}
+                                            className="w-full rounded-lg px-3 py-2 text-sm border border-teal-300 focus:outline-none focus:border-teal-500 resize-none text-gray-800"
+                                            rows={3}
+                                            autoFocus
+                                        />
+                                        <div className="flex gap-2 justify-end">
+                                            <button
+                                                onClick={() => setEditingId(null)}
+                                                className="text-xs text-gray-500 hover:text-gray-700 px-3 py-1 rounded border border-gray-200 hover:border-gray-300 transition-colors"
                                             >
-                                                {message.content}
-                                            </ReactMarkdown>
+                                                Cancel
+                                            </button>
+                                            <button
+                                                onClick={() => handleConfirmEdit(message.id)}
+                                                className="text-xs text-white bg-teal-500 hover:bg-teal-600 px-3 py-1 rounded transition-colors"
+                                            >
+                                                Send
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="group relative flex flex-col items-end gap-1">
+                                        <div className="rounded-lg py-3 px-5 bg-gradient-to-br from-[#5E507F] to-[#4A3F71] text-white rounded-br-none shadow-md">
+                                            {message.content}
+                                        </div>
+                                        {onEditMessage && (
+                                            <button
+                                                onClick={() => { setEditingId(message.id); setEditContent(message.content); }}
+                                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600 transition-all duration-150 p-1 rounded"
+                                                title="Edit message"
+                                            >
+                                                <PencilIcon />
+                                            </button>
+                                        )}
+                                    </div>
+                                )
+                            ) : (
+                                /* AI message */
+                                <div className="rounded-lg py-3 px-5 bg-[#F3F3EE] text-gray-800 border border-gray-200 rounded-bl-none shadow-sm">
+                                    {message.isLoading ? (
+                                        <PremiumTypingAnimation />
+                                    ) : (
+                                        message.content ? (
+                                            <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:underline prose-pre:p-0 prose-pre:bg-transparent">
+                                                <ReactMarkdown
+                                                    components={{
+                                                        a: ({ node: _node, ...props }) =>
+                                                            <a {...props}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="text-blue-600 underline hover:text-blue-800" />,
+                                                        code({ className, children, ...props }) {
+                                                            const isBlock = className?.startsWith('language-');
+                                                            if (isBlock) {
+                                                                return <CodeBlock className={className}>{children}</CodeBlock>;
+                                                            }
+                                                            return (
+                                                                <code
+                                                                    className="bg-gray-100 text-rose-600 px-1.5 py-0.5 rounded text-xs font-mono"
+                                                                    {...props}
+                                                                >
+                                                                    {children}
+                                                                </code>
+                                                            );
+                                                        }
+                                                    }}
+                                                >
+                                                    {message.content}
+                                                </ReactMarkdown>
                                             </div>
                                         ) : (
-                                        <span className="text-gray-400 text-xs italic">Waiting for response...</span>
+                                            <span className="text-gray-400 text-xs italic">Waiting for response...</span>
                                         )
-                                )}
-                            </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
                 ))}

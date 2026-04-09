@@ -58,7 +58,7 @@ def build_system_prompt() -> str:
         f"that does not change (e.g. 'what is photosynthesis').\n\n"
         f"RESPONSE GUIDELINES:\n"
         f"- Be concise and direct. Avoid unnecessary filler phrases.\n"
-        f"- When you use search results, cite the sources naturally in your answer.\n"
+        f"- When you use search results, cite sources using the source title as the link text — never use the word 'source' as link text. Format as [Title](url).\n"
         f"- Format responses with markdown where it improves readability.\n"
         f"- Never introduce yourself as ChatGPT or any other assistant."
     )
