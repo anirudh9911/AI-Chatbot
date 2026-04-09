@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: inquiro-cluster
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Maps NodePort 30000 (client-svc) to localhost:3000
+      # So the app is reachable at http://localhost:3000 — same as local dev
+      - containerPort: 30000
+        hostPort: 3000
+        protocol: TCP
